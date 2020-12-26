@@ -151,7 +151,8 @@ func run(cmd *cobra.Command, args []string) error {
 func initStartContainer(container string,
 		defaultContainer bool,
 		image, release string,
-		pedantic bool) error {
+		command []string,
+		fallbackToBash, pedantic bool) error {
 
 	logrus.Debugf("Checking if container %s exists", container)
 
@@ -262,6 +263,20 @@ func initStartContainer(container string,
 
 	logrus.Debugf("Container %s is initialized", container)
 
+	if _, err := isCommandPresent(container, command[0]); err != nil {
+		if fallbackToBash {
+			fmt.Fprintf(os.Stderr,
+				"Error: command %s not found in container %s\n",
+				command[0],
+				container)
+			fmt.Fprintf(os.Stderr, "Using /bin/bash instead.\n")
+
+			command = []string{"/bin/bash", "-l"}
+		} else {
+			return fmt.Errorf("command %s not found in container %s", command[0], container)
+		}
+	}
+
 	return nil
 }
 
@@ -281,33 +296,22 @@ func runCommand(container string,
 	}
 
 	if runFlags.init {
-		if err := initStartContainer(container, defaultContainer, image, release, pedantic); err != nil {
+		if err := initStartContainer(container, defaultContainer, image, release, command, fallbackToBash, pedantic); err != nil {
 			return err
-		}
-	}
-
-	if _, err := isCommandPresent(container, command[0]); err != nil {
-		if fallbackToBash {
-			fmt.Fprintf(os.Stderr,
-				"Error: command %s not found in container %s\n",
-				command[0],
-				container)
-			fmt.Fprintf(os.Stderr, "Using /bin/bash instead.\n")
-
-			command = []string{"/bin/bash", "-l"}
-		} else {
-			return fmt.Errorf("command %s not found in container %s", command[0], container)
 		}
 	}
 
 	logrus.Debug("Checking if 'podman exec' supports disabling the detach keys")
 
 	var detachKeys []string
+	detachKeys = []string{"--detach-keys", ""}
 
+	/*
 	if podman.CheckVersion("1.8.1") {
 		logrus.Debug("'podman exec' supports disabling the detach keys")
 		detachKeys = []string{"--detach-keys", ""}
 	}
+	*/
 
 	envOptions := utils.GetEnvOptionsForPreservedVariables()
 	logLevelString := podman.LogLevel.String()
