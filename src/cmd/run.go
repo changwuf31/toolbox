@@ -35,6 +35,7 @@ var (
 		container string
 		release   string
 		noTty     bool
+		init      bool
 	}
 )
 
@@ -57,6 +58,12 @@ func init() {
 	flags.BoolVarP(&runFlags.noTty,
 		"no-tty",
 		"T",
+		false,
+		"Run command without allocating a pseudo-TTY.")
+
+	flags.BoolVarP(&runFlags.init,
+		"init",
+		"i",
 		false,
 		"Run command without allocating a pseudo-TTY.")
 
@@ -141,20 +148,10 @@ func run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runCommand(container string,
-	defaultContainer bool,
-	image, release string,
-	command []string,
-	emitEscapeSequence, fallbackToBash, pedantic bool) error {
-	if !pedantic {
-		if image == "" {
-			panic("image not specified")
-		}
-
-		if release == "" {
-			panic("release not specified")
-		}
-	}
+func initStartContainer(container string,
+		defaultContainer bool,
+		image, release string,
+		pedantic bool) error {
 
 	logrus.Debugf("Checking if container %s exists", container)
 
@@ -264,6 +261,30 @@ func runCommand(container string,
 	}
 
 	logrus.Debugf("Container %s is initialized", container)
+
+	return nil
+}
+
+func runCommand(container string,
+	defaultContainer bool,
+	image, release string,
+	command []string,
+	emitEscapeSequence, fallbackToBash, pedantic bool) error {
+	if !pedantic {
+		if image == "" {
+			panic("image not specified")
+		}
+
+		if release == "" {
+			panic("release not specified")
+		}
+	}
+
+	if runFlags.init {
+		if err := initStartContainer(container, defaultContainer, image, release, pedantic); err != nil {
+			return err
+		}
+	}
 
 	if _, err := isCommandPresent(container, command[0]); err != nil {
 		if fallbackToBash {
