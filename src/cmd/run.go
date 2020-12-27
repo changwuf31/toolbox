@@ -373,6 +373,11 @@ func runCommand(container string,
 		} else {
 			err = fmt.Errorf("command %s not found in container %s", command[0], container)
 		}
+	case 255:
+		if runFlags.init == false {
+			runFlags.init = true
+			err = runCommand(container, defaultContainer, image, release, command, emitEscapeSequence, fallbackToBash, pedantic)
+		}
 	default:
 		err = nil
 	}
