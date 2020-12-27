@@ -45,6 +45,7 @@ var (
 		container string
 		image     string
 		release   string
+		hostname  string
 	}
 
 	createToolboxShMounts = []struct {
@@ -82,6 +83,12 @@ func init() {
 		"r",
 		"",
 		"Create a toolbox container for a different operating system release than the host.")
+
+	flags.StringVarP(&createFlags.hostname,
+		"hostname",
+		"o",
+		"",
+		"Specify container hostname")
 
 	createCmd.SetHelpFunc(createHelp)
 	rootCmd.AddCommand(createCmd)
@@ -133,21 +140,25 @@ func create(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	container, image, release, err := utils.ResolveContainerAndImageNames(container,
-		createFlags.image,
-		release)
-	if err != nil {
-		return err
+	image := createFlags.image
+	if createFlags.image == "" {
+		var err error
+		container, image, release, err = utils.ResolveContainerAndImageNames(container,
+			createFlags.image,
+			release)
+		if err != nil {
+			return err
+		}
 	}
 
-	if err := createContainer(container, image, release, true); err != nil {
+	if err := createContainer(container, image, release, createFlags.hostname, true); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func createContainer(container, image, release string, showCommandToEnter bool) error {
+func createContainer(container, image, release, hostname string, showCommandToEnter bool) error {
 	if container == "" {
 		panic("container not specified")
 	}
@@ -158,6 +169,10 @@ func createContainer(container, image, release string, showCommandToEnter bool) 
 
 	if release == "" {
 		panic("release not specified")
+	}
+
+	if hostname == "" {
+		panic("hostname not specified")
 	}
 
 	enterCommand := getEnterCommand(container, release)
@@ -241,12 +256,14 @@ func createContainer(container, image, release string, showCommandToEnter bool) 
 
 	dbusSystemSocketMountArg := dbusSystemSocket + ":" + dbusSystemSocket
 
-	homeDirEvaled, err := filepath.EvalSymlinks(currentUser.HomeDir)
+	homeDir := strings.Replace(currentUser.HomeDir, currentUser.Username, container, 1)
+
+	homeDirEvaled, err := filepath.EvalSymlinks(homeDir)
 	if err != nil {
-		return fmt.Errorf("failed to canonicalize %s", currentUser.HomeDir)
+		return fmt.Errorf("failed to canonicalize %s", homeDir)
 	}
 
-	logrus.Debugf("%s canonicalized to %s", currentUser.HomeDir, homeDirEvaled)
+	logrus.Debugf("%s canonicalized to %s", homeDir, homeDirEvaled)
 	homeDirMountArg := homeDirEvaled + ":" + homeDirEvaled + ":rslave"
 
 	usrMountFlags := "ro"
@@ -350,7 +367,7 @@ func createContainer(container, image, release string, showCommandToEnter bool) 
 	entryPoint := []string{
 		"toolbox", "--verbose",
 		"init-container",
-		"--home", currentUser.HomeDir,
+		"--home", homeDir,
 	}
 
 	entryPoint = append(entryPoint, slashHomeLink...)
@@ -374,7 +391,7 @@ func createContainer(container, image, release string, showCommandToEnter bool) 
 	createArgs = append(createArgs, xdgRuntimeDirEnv...)
 
 	createArgs = append(createArgs, []string{
-		"--hostname", "toolbox",
+		"--hostname", hostname,
 		"--ipc", "host",
 		"--label", "com.github.containers.toolbox=true",
 		"--label", "com.github.debarshiray.toolbox=true",
@@ -402,6 +419,8 @@ func createContainer(container, image, release string, showCommandToEnter bool) 
 		"--volume", "/run:/run/host/run:rslave",
 		"--volume", "/tmp:/run/host/tmp:rslave",
 		"--volume", "/var:/run/host/var:rslave",
+		"--volume", "/var/home/shared:/var/home/shared:rslave",
+		"--volume", "/var/home/shared/var/cache/dnf:/var/cache/dnf:rslave",
 		"--volume", dbusSystemSocketMountArg,
 		"--volume", homeDirMountArg,
 		"--volume", toolboxPathMountArg,
