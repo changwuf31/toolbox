@@ -369,7 +369,12 @@ func runCommand(container string,
 		err = fmt.Errorf("failed to invoke command %s in container %s", command[0], container)
 	case 127:
 		if pathPresent, _ := isPathPresent(container, workingDirectory); !pathPresent {
-			err = fmt.Errorf("directory %s not found in container %s", workingDirectory, container)
+			workDir := fmt.Sprintf("/var/home/%s", container)
+			if pathPresent, _ := isPathPresent(container, workDir); !pathPresent {
+				err = fmt.Errorf("directory %s not found in container %s", workingDirectory, container)
+			}
+			workingDirectory = workDir
+			err = runCommand(container, defaultContainer, image, release, command, emitEscapeSequence, fallbackToBash, pedantic)
 		} else {
 			err = fmt.Errorf("command %s not found in container %s", command[0], container)
 		}
