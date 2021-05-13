@@ -1,5 +1,5 @@
 /*
- * Copyright © 2019 – 2020 Red Hat Inc.
+ * Copyright © 2019 – 2021 Red Hat Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,6 @@ import (
 
 	"github.com/containers/toolbox/pkg/podman"
 	"github.com/containers/toolbox/pkg/utils"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -44,13 +43,13 @@ var rmiCmd = &cobra.Command{
 func init() {
 	flags := rmiCmd.Flags()
 
-	flags.BoolVarP(&rmiFlags.deleteAll, "all", "a", false, "Remove all toolbox containers.")
+	flags.BoolVarP(&rmiFlags.deleteAll, "all", "a", false, "Remove all toolbox containers")
 
 	flags.BoolVarP(&rmiFlags.forceDelete,
 		"force",
 		"f",
 		false,
-		"Force the removal of running and paused toolbox containers.")
+		"Force the removal of running and paused toolbox containers")
 
 	rmiCmd.SetHelpFunc(rmiHelp)
 	rootCmd.AddCommand(rmiCmd)
@@ -70,33 +69,15 @@ func rmi(cmd *cobra.Command, args []string) error {
 	}
 
 	if rmiFlags.deleteAll {
-		logrus.Debug("Fetching images with label=com.redhat.component=fedora-toolbox")
-		args := []string{"--filter", "label=com.redhat.component=fedora-toolbox"}
-		images_old, err := podman.GetImages(args...)
+		var toolboxImages []toolboxImage
+
+		toolboxImages, err := getImages()
 		if err != nil {
-			return errors.New("failed to list images with com.redhat.component=fedora-toolbox")
+			return err
 		}
 
-		logrus.Debug("Fetching images with label=com.github.debarshiray.toolbox=true")
-		args = []string{"--filter", "label=com.github.debarshiray.toolbox=true"}
-		images_new, err := podman.GetImages(args...)
-		if err != nil {
-			return errors.New("failed to list images with com.github.debarshiray.toolbox=true")
-		}
-
-		var idKey string
-		if podman.CheckVersion("2.0.0") {
-			idKey = "Id"
-		} else if podman.CheckVersion("1.8.3") {
-			idKey = "ID"
-		} else {
-			idKey = "id"
-		}
-
-		images := utils.JoinJSON(idKey, images_old, images_new)
-
-		for _, image := range images {
-			imageID := image[idKey].(string)
+		for _, image := range toolboxImages {
+			imageID := image.ID
 			if err := podman.RemoveImage(imageID, rmiFlags.forceDelete); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 				continue

@@ -1,5 +1,5 @@
 /*
- * Copyright © 2019 – 2020 Red Hat Inc.
+ * Copyright © 2019 – 2021 Red Hat Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@ import (
 
 var (
 	initContainerFlags struct {
+		gid         int
 		home        string
 		homeLink    bool
 		mediaLink   bool
@@ -54,6 +55,7 @@ var (
 		{"/etc/machine-id", "/run/host/etc/machine-id", "ro"},
 		{"/run/libvirt", "/run/host/run/libvirt", ""},
 		{"/run/systemd/journal", "/run/host/run/systemd/journal", ""},
+		{"/run/systemd/resolve", "/run/host/run/systemd/resolve", ""},
 		{"/run/udev/data", "/run/host/run/udev/data", ""},
 		{"/tmp", "/run/host/tmp", "rslave"},
 		{"/var/lib/flatpak", "/run/host/var/lib/flatpak", "ro"},
@@ -74,47 +76,53 @@ var initContainerCmd = &cobra.Command{
 func init() {
 	flags := initContainerCmd.Flags()
 
+	flags.IntVar(&initContainerFlags.gid,
+		"gid",
+		0,
+		"Create a user inside the toolbox container whose numerical group ID is GID")
+
 	flags.StringVar(&initContainerFlags.home,
 		"home",
 		"",
-		"Create a user inside the toolbox container whose login directory is HOME.")
+		"Create a user inside the toolbox container whose login directory is HOME")
 	initContainerCmd.MarkFlagRequired("home")
 
 	flags.BoolVar(&initContainerFlags.homeLink,
 		"home-link",
 		false,
-		"Make /home a symbolic link to /var/home.")
+		"Make /home a symbolic link to /var/home")
 
 	flags.BoolVar(&initContainerFlags.mediaLink,
 		"media-link",
 		false,
-		"Make /media a symbolic link to /run/media.")
+		"Make /media a symbolic link to /run/media")
 
-	flags.BoolVar(&initContainerFlags.mntLink, "mnt-link", false, "Make /mnt a symbolic link to /var/mnt.")
+	flags.BoolVar(&initContainerFlags.mntLink, "mnt-link", false, "Make /mnt a symbolic link to /var/mnt")
 
 	flags.BoolVar(&initContainerFlags.monitorHost,
 		"monitor-host",
 		false,
-		"Ensure that certain configuration files inside the toolbox container are in sync with the host.")
+		"Ensure that certain configuration files inside the toolbox container are in sync with the host")
 
 	flags.StringVar(&initContainerFlags.shell,
 		"shell",
 		"",
-		"Create a user inside the toolbox container whose login shell is SHELL.")
+		"Create a user inside the toolbox container whose login shell is SHELL")
 	initContainerCmd.MarkFlagRequired("shell")
 
 	flags.IntVar(&initContainerFlags.uid,
 		"uid",
 		0,
-		"Create a user inside the toolbox container whose numerical user ID is UID.")
+		"Create a user inside the toolbox container whose numerical user ID is UID")
 	initContainerCmd.MarkFlagRequired("uid")
 
 	flags.StringVar(&initContainerFlags.user,
 		"user",
 		"",
-		"Create a user inside the toolbox container whose login name is USER.")
+		"Create a user inside the toolbox container whose login name is USER")
 	initContainerCmd.MarkFlagRequired("user")
 
+	initContainerCmd.FParseErrWhitelist.UnknownFlags = true
 	initContainerCmd.SetHelpFunc(initContainerHelp)
 	rootCmd.AddCommand(initContainerCmd)
 }
@@ -127,6 +135,10 @@ func initContainer(cmd *cobra.Command, args []string) error {
 
 		errMsg := builder.String()
 		return errors.New(errMsg)
+	}
+
+	if !cmd.Flag("gid").Changed {
+		initContainerFlags.gid = initContainerFlags.uid
 	}
 
 	utils.EnsureXdgRuntimeDirIsSet(initContainerFlags.uid)
@@ -302,7 +314,7 @@ func initContainer(cmd *cobra.Command, args []string) error {
 
 	defer initializedStampFile.Close()
 
-	if err := initializedStampFile.Chown(initContainerFlags.uid, initContainerFlags.uid); err != nil {
+	if err := initializedStampFile.Chown(initContainerFlags.uid, initContainerFlags.gid); err != nil {
 		return errors.New("failed to change ownership of initialization stamp")
 	}
 
@@ -586,25 +598,57 @@ func sanitizeRedirectionTarget(target string) string {
 	return target
 }
 
+func extractTimeZoneFromLocalTimeSymLink(path string) (string, error) {
+	zoneInfoRoots := []string{
+		"/run/host/usr/share/zoneinfo",
+		"/usr/share/zoneinfo",
+	}
+
+	for _, root := range zoneInfoRoots {
+		if !strings.HasPrefix(path, root) {
+			continue
+		}
+
+		timeZone, err := filepath.Rel(root, path)
+		if err != nil {
+			return "", fmt.Errorf("failed to extract time zone: %w", err)
+		}
+
+		return timeZone, nil
+	}
+
+	return "", errors.New("/etc/localtime points to unknown location")
+}
+
 func updateTimeZoneFromLocalTime() error {
 	localTimeEvaled, err := filepath.EvalSymlinks("/etc/localtime")
 	if err != nil {
+		if os.IsNotExist(err) {
+			if err := writeTimeZone("UTC"); err != nil {
+				return err
+			}
+
+			return nil
+		}
+
 		return fmt.Errorf("failed to resolve /etc/localtime: %w", err)
 	}
 
 	logrus.Debugf("Resolved /etc/localtime to %s", localTimeEvaled)
 
-	const zoneInfoRoot = "/run/host/usr/share/zoneinfo"
-
-	if !strings.HasPrefix(localTimeEvaled, zoneInfoRoot) {
-		return errors.New("/etc/localtime points to unknown location")
-	}
-
-	timeZone, err := filepath.Rel(zoneInfoRoot, localTimeEvaled)
+	timeZone, err := extractTimeZoneFromLocalTimeSymLink(localTimeEvaled)
 	if err != nil {
-		return fmt.Errorf("failed to extract time zone: %w", err)
+		return err
 	}
 
+	if err := writeTimeZone(timeZone); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func writeTimeZone(timeZone string) error {
 	const etcTimeZone = "/etc/timezone"
 
 	if err := os.Remove(etcTimeZone); err != nil {
@@ -614,8 +658,7 @@ func updateTimeZoneFromLocalTime() error {
 	}
 
 	timeZoneBytes := []byte(timeZone + "\n")
-	err = ioutil.WriteFile(etcTimeZone, timeZoneBytes, 0664)
-	if err != nil {
+	if err := ioutil.WriteFile(etcTimeZone, timeZoneBytes, 0664); err != nil {
 		return fmt.Errorf("failed to create new %s: %w", etcTimeZone, err)
 	}
 

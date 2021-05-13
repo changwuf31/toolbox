@@ -1,5 +1,5 @@
 /*
- * Copyright © 2019 – 2020 Red Hat Inc.
+ * Copyright © 2019 – 2021 Red Hat Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,6 +33,7 @@ import (
 var (
 	runFlags struct {
 		container string
+		distro    string
 		release   string
 		noTty     bool
 		init      bool
@@ -53,7 +54,13 @@ func init() {
 		"container",
 		"c",
 		"",
-		"Run command inside a toolbox container with the given name.")
+		"Run command inside a toolbox container with the given name")
+
+	flags.StringVarP(&runFlags.distro,
+		"distro",
+		"d",
+		"",
+		"Run command inside a toolbox container for a different operating system distribution than the host")
 
 	flags.BoolVarP(&runFlags.noTty,
 		"no-tty",
@@ -71,7 +78,7 @@ func init() {
 		"release",
 		"r",
 		"",
-		"Run command inside a toolbox container for a different operating system release than the host.")
+		"Run command inside a toolbox container for a different operating system release than the host")
 
 	runCmd.SetHelpFunc(runHelp)
 	rootCmd.AddCommand(runCmd)
@@ -95,7 +102,7 @@ func run(cmd *cobra.Command, args []string) error {
 	if runFlags.container != "" {
 		nonDefaultContainer = true
 
-		if _, err := utils.IsContainerNameValid(runFlags.container); err != nil {
+		if !utils.IsContainerNameValid(runFlags.container) {
 			var builder strings.Builder
 			fmt.Fprintf(&builder, "invalid argument for '--container'\n")
 			fmt.Fprintf(&builder, "Container names must match '%s'\n", utils.ContainerNameRegexp)
@@ -111,7 +118,7 @@ func run(cmd *cobra.Command, args []string) error {
 		nonDefaultContainer = true
 
 		var err error
-		release, err = utils.ParseRelease(runFlags.release)
+		release, err = utils.ParseRelease(runFlags.distro, runFlags.release)
 		if err != nil {
 			err := utils.CreateErrorInvalidRelease(executableBase)
 			return err
@@ -129,7 +136,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	command := args
 
-	container, image, release, err := utils.ResolveContainerAndImageNames(runFlags.container, "", release)
+	container, image, release, err := utils.ResolveContainerAndImageNames(runFlags.container, runFlags.distro, "", release)
 	if err != nil {
 		return err
 	}
@@ -164,7 +171,7 @@ func initStartContainer(container string,
 			return err
 		}
 
-		containers, err := listContainers()
+		containers, err := getContainers()
 		if err != nil {
 			err := utils.CreateErrorContainerNotFound(container, executableBase)
 			return err

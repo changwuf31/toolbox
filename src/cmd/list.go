@@ -1,5 +1,5 @@
 /*
- * Copyright © 2019 – 2020 Red Hat Inc.
+ * Copyright © 2019 – 2021 Red Hat Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -64,13 +64,13 @@ func init() {
 		"containers",
 		"c",
 		false,
-		"List only toolbox containers, not images.")
+		"List only toolbox containers, not images")
 
 	flags.BoolVarP(&listFlags.onlyImages,
 		"images",
 		"i",
 		false,
-		"List only toolbox images, not containers.")
+		"List only toolbox images, not containers")
 
 	listCmd.SetHelpFunc(listHelp)
 	rootCmd.AddCommand(listCmd)
@@ -103,14 +103,14 @@ func list(cmd *cobra.Command, args []string) error {
 	var err error
 
 	if lsImages {
-		images, err = listImages()
+		images, err = getImages()
 		if err != nil {
 			return err
 		}
 	}
 
 	if lsContainers {
-		containers, err = listContainers()
+		containers, err = getContainers()
 		if err != nil {
 			return err
 		}
@@ -120,19 +120,19 @@ func list(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func listContainers() ([]toolboxContainer, error) {
-	logrus.Debug("Fetching containers with label=com.redhat.component=fedora-toolbox")
-	args := []string{"--all", "--filter", "label=com.redhat.component=fedora-toolbox"}
+func getContainers() ([]toolboxContainer, error) {
+	logrus.Debug("Fetching containers with label=com.github.containers.toolbox=true")
+	args := []string{"--all", "--filter", "label=com.github.containers.toolbox=true"}
 	containers_old, err := podman.GetContainers(args...)
 	if err != nil {
-		return nil, errors.New("failed to list containers with com.redhat.component=fedora-toolbox")
+		return nil, fmt.Errorf("failed to list containers with label=com.github.containers.toolbox=true: %w", err)
 	}
 
 	logrus.Debug("Fetching containers with label=com.github.debarshiray.toolbox=true")
 	args = []string{"--all", "--filter", "label=com.github.debarshiray.toolbox=true"}
 	containers_new, err := podman.GetContainers(args...)
 	if err != nil {
-		return nil, errors.New("failed to list containers with label=com.github.debarshiray.toolbox=true")
+		return nil, fmt.Errorf("failed to list containers with label=com.github.debarshiray.toolbox=true: %w", err)
 	}
 
 	var containers []map[string]interface{}
@@ -188,12 +188,12 @@ func listHelp(cmd *cobra.Command, args []string) {
 	}
 }
 
-func listImages() ([]toolboxImage, error) {
-	logrus.Debug("Fetching images with label=com.redhat.component=fedora-toolbox")
-	args := []string{"--filter", "label=com.redhat.component=fedora-toolbox"}
+func getImages() ([]toolboxImage, error) {
+	logrus.Debug("Fetching images with label=com.github.containers.toolbox=true")
+	args := []string{"--filter", "label=com.github.containers.toolbox=true"}
 	images_old, err := podman.GetImages(args...)
 	if err != nil {
-		return nil, errors.New("failed to list images with com.redhat.component=fedora-toolbox")
+		return nil, errors.New("failed to list images with label=com.github.containers.toolbox=true")
 	}
 
 	logrus.Debug("Fetching images with label=com.github.debarshiray.toolbox=true")

@@ -1,5 +1,5 @@
 /*
- * Copyright © 2019 – 2020 Red Hat Inc.
+ * Copyright © 2019 – 2021 Red Hat Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,6 +43,7 @@ const (
 var (
 	createFlags struct {
 		container string
+		distro    string
 		image     string
 		release   string
 		hostname  string
@@ -70,19 +71,25 @@ func init() {
 		"container",
 		"c",
 		"",
-		"Assign a different name to the toolbox container.")
+		"Assign a different name to the toolbox container")
+
+	flags.StringVarP(&createFlags.distro,
+		"distro",
+		"d",
+		"",
+		"Create a toolbox container for a different operating system distribution than the host")
 
 	flags.StringVarP(&createFlags.image,
 		"image",
 		"i",
 		"",
-		"Change the name of the base image used to create the toolbox container.")
+		"Change the name of the base image used to create the toolbox container")
 
 	flags.StringVarP(&createFlags.release,
 		"release",
 		"r",
 		"",
-		"Create a toolbox container for a different operating system release than the host.")
+		"Create a toolbox container for a different operating system release than the host")
 
 	flags.StringVarP(&createFlags.hostname,
 		"hostname",
@@ -107,6 +114,14 @@ func create(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	if cmd.Flag("distro").Changed && cmd.Flag("image").Changed {
+		return errors.New("options --distro and --image cannot be used together")
+	}
+
+	if cmd.Flag("image").Changed && cmd.Flag("release").Changed {
+		return errors.New("options --image and --release cannot be used together")
+	}
+
 	var container string
 	var containerArg string
 
@@ -119,7 +134,7 @@ func create(cmd *cobra.Command, args []string) error {
 	}
 
 	if container != "" {
-		if _, err := utils.IsContainerNameValid(container); err != nil {
+		if !utils.IsContainerNameValid(container) {
 			var builder strings.Builder
 			fmt.Fprintf(&builder, "invalid argument for '%s'\n", containerArg)
 			fmt.Fprintf(&builder, "Container names must match '%s'\n", utils.ContainerNameRegexp)
@@ -133,22 +148,19 @@ func create(cmd *cobra.Command, args []string) error {
 	var release string
 	if createFlags.release != "" {
 		var err error
-		release, err = utils.ParseRelease(createFlags.release)
+		release, err = utils.ParseRelease(createFlags.distro, createFlags.release)
 		if err != nil {
 			err := utils.CreateErrorInvalidRelease(executableBase)
 			return err
 		}
 	}
 
-	image := createFlags.image
-	if createFlags.image == "" {
-		var err error
-		container, image, release, err = utils.ResolveContainerAndImageNames(container,
-			createFlags.image,
-			release)
-		if err != nil {
-			return err
-		}
+	container, image, release, err := utils.ResolveContainerAndImageNames(container,
+		createFlags.distro,
+		createFlags.image,
+		release)
+	if err != nil {
+		return err
 	}
 
 	if err := createContainer(container, image, release, createFlags.hostname, true); err != nil {
@@ -197,7 +209,7 @@ func createContainer(container, image, release, hostname string, showCommandToEn
 		return nil
 	}
 
-	imageFull, err := getFullyQualifiedImageName(image)
+	imageFull, err := getFullyQualifiedImageFromRepoTags(image)
 	if err != nil {
 		return err
 	}
@@ -266,8 +278,19 @@ func createContainer(container, image, release, hostname string, showCommandToEn
 	logrus.Debugf("%s canonicalized to %s", homeDir, homeDirEvaled)
 	homeDirMountArg := homeDirEvaled + ":" + homeDirEvaled + ":rslave"
 
+	bootMountFlags := "rw"
+	isBootReadWrite, err := isPathReadWrite("/boot")
+	if err != nil {
+		return err
+	}
+	if !isBootReadWrite {
+		bootMountFlags = "ro"
+	}
+
+	bootMountArg := "/boot:/run/host/boot:" + bootMountFlags + ",rslave"
+
 	usrMountFlags := "ro"
-	isUsrReadWrite, err := isUsrReadWrite()
+	isUsrReadWrite, err := isPathReadWrite("/usr")
 	if err != nil {
 		return err
 	}
@@ -314,17 +337,19 @@ func createContainer(container, image, release, hostname string, showCommandToEn
 		}
 	}
 
-	logrus.Debug("Checking if /mnt is a symbolic link to /var/mnt")
-
 	var mntLink []string
 	var mntMount []string
 
-	mntPath, _ := filepath.EvalSymlinks("/mnt")
-	if mntPath == "/var/mnt" {
-		logrus.Debug("/mnt is a symbolic link to /var/mnt")
-		mntLink = []string{"--mnt-link"}
-	} else {
-		mntMount = []string{"--volume", "/mnt:/mnt:rslave"}
+	if utils.PathExists("/mnt") {
+		logrus.Debug("Checking if /mnt is a symbolic link to /var/mnt")
+
+		mntPath, _ := filepath.EvalSymlinks("/mnt")
+		if mntPath == "/var/mnt" {
+			logrus.Debug("/mnt is a symbolic link to /var/mnt")
+			mntLink = []string{"--mnt-link"}
+		} else {
+			mntMount = []string{"--volume", "/mnt:/mnt:rslave"}
+		}
 	}
 
 	var runMediaMount []string
@@ -365,21 +390,19 @@ func createContainer(container, image, release, hostname string, showCommandToEn
 	}
 
 	entryPoint := []string{
-		"toolbox", "--verbose",
+		"toolbox", "--log-level", "debug",
 		"init-container",
 		"--home", homeDir,
+		"--gid", currentUser.Gid,
+		"--shell", userShell,
+		"--uid", currentUser.Uid,
+		"--user", currentUser.Username,
+		"--monitor-host",
 	}
 
 	entryPoint = append(entryPoint, slashHomeLink...)
 	entryPoint = append(entryPoint, mediaLink...)
 	entryPoint = append(entryPoint, mntLink...)
-
-	entryPoint = append(entryPoint, []string{
-		"--monitor-host",
-		"--shell", userShell,
-		"--uid", currentUser.Uid,
-		"--user", currentUser.Username,
-	}...)
 
 	createArgs := []string{
 		"--log-level", logLevelString,
@@ -413,7 +436,7 @@ func createContainer(container, image, release, hostname string, showCommandToEn
 	createArgs = append(createArgs, []string{
 		"--userns", usernsArg,
 		"--user", "root:root",
-		"--volume", "/boot:/run/host/boot:rslave",
+		"--volume", bootMountArg,
 		"--volume", "/etc:/run/host/etc",
 		"--volume", "/dev:/dev:rslave",
 		"--volume", "/run:/run/host/run:rslave",
@@ -462,6 +485,7 @@ func createContainer(container, image, release, hostname string, showCommandToEn
 		return fmt.Errorf("failed to create container %s", container)
 	}
 
+	// The spinner must be stopped before showing the 'enter' hit below.
 	s.Stop()
 
 	if showCommandToEnter {
@@ -509,7 +533,7 @@ func getDBusSystemSocket() (string, error) {
 	path := addressSplit[1]
 	pathEvaled, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return "", errors.New("failed to resolve the path to the D-Bus system socket")
+		return "", fmt.Errorf("failed to resolve the path to the D-Bus system socket: %w", err)
 	}
 
 	return pathEvaled, nil
@@ -531,8 +555,8 @@ func getEnterCommand(container, release string) string {
 	return enterCommand
 }
 
-func getFullyQualifiedImageName(image string) (string, error) {
-	logrus.Debugf("Resolving fully qualified name for image %s", image)
+func getFullyQualifiedImageFromRepoTags(image string) (string, error) {
+	logrus.Debugf("Resolving fully qualified name for image %s from RepoTags", image)
 
 	var imageFull string
 
@@ -553,7 +577,18 @@ func getFullyQualifiedImageName(image string) (string, error) {
 			return "", fmt.Errorf("empty RepoTag for image %s", image)
 		}
 
-		imageFull = repoTags[0].(string)
+		for _, repoTag := range repoTags {
+			repoTagString := repoTag.(string)
+			tag := utils.ImageReferenceGetTag(repoTagString)
+			if tag != "latest" {
+				imageFull = repoTagString
+				break
+			}
+		}
+
+		if imageFull == "" {
+			imageFull = repoTags[0].(string)
+		}
 	}
 
 	logrus.Debugf("Resolved image %s to %s", image, imageFull)
@@ -566,7 +601,7 @@ func getServiceSocket(serviceName string, unitName string) (string, error) {
 
 	connection, err := dbus.SystemBus()
 	if err != nil {
-		return "", errors.New("failed to connect to the D-Bus system instance")
+		return "", fmt.Errorf("failed to connect to the D-Bus system instance: %w", err)
 	}
 
 	unitNameEscaped := systemdPathBusEscape(unitName)
@@ -577,14 +612,12 @@ func getServiceSocket(serviceName string, unitName string) (string, error) {
 	var result map[string]dbus.Variant
 	err = call.Store(&result)
 	if err != nil {
-		errMsg := fmt.Sprintf("failed to get the properties of %s", unitName)
-		return "", errors.New(errMsg)
+		return "", fmt.Errorf("failed to get the properties of %s: %w", unitName, err)
 	}
 
 	listenVariant, listenFound := result["Listen"]
 	if !listenFound {
-		errMsg := fmt.Sprintf("failed to find the Listen property of %s", unitName)
-		return "", errors.New(errMsg)
+		return "", fmt.Errorf("failed to find the Listen property of %s: %w", unitName, err)
 	}
 
 	listenVariantSignature := listenVariant.Signature().String()
@@ -610,26 +643,25 @@ func getServiceSocket(serviceName string, unitName string) (string, error) {
 		}
 	}
 
-	errMsg := fmt.Sprintf("failed to find a SOCK_STREAM socket for %s", unitName)
-	return "", errors.New(errMsg)
+	return "", fmt.Errorf("failed to find a SOCK_STREAM socket for %s", unitName)
 }
 
-func isUsrReadWrite() (bool, error) {
-	logrus.Debug("Checking if /usr is mounted read-only or read-write")
+func isPathReadWrite(path string) (bool, error) {
+	logrus.Debugf("Checking if %s is mounted read-only or read-write", path)
 
-	mountPoint, err := utils.GetMountPoint("/usr")
+	mountPoint, err := utils.GetMountPoint(path)
 	if err != nil {
-		return false, fmt.Errorf("failed to get the mount-point of /usr: %s", err)
+		return false, fmt.Errorf("failed to get the mount-point of %s: %s", path, err)
 	}
 
-	logrus.Debugf("Mount-point of /usr is %s", mountPoint)
+	logrus.Debugf("Mount-point of %s is %s", path, mountPoint)
 
 	mountFlags, err := utils.GetMountOptions(mountPoint)
 	if err != nil {
 		return false, fmt.Errorf("failed to get the mount options of %s: %s", mountPoint, err)
 	}
 
-	logrus.Debugf("Mount flags of /usr on the host are %s", mountFlags)
+	logrus.Debugf("Mount flags of %s on the host are %s", path, mountFlags)
 
 	if !strings.Contains(mountFlags, "ro") {
 		return true, nil
@@ -663,7 +695,11 @@ func pullImage(image, release string) (bool, error) {
 	if hasDomain {
 		imageFull = image
 	} else {
-		imageFull = fmt.Sprintf("registry.fedoraproject.org/f%s/%s", release, image)
+		var err error
+		imageFull, err = utils.GetFullyQualifiedImageFromDistros(image, release)
+		if err != nil {
+			return false, fmt.Errorf("image %s not found in local storage and known registries", image)
+		}
 	}
 
 	logrus.Debugf("Looking for image %s", imageFull)

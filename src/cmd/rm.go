@@ -1,5 +1,5 @@
 /*
- * Copyright © 2019 – 2020 Red Hat Inc.
+ * Copyright © 2019 – 2021 Red Hat Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,6 @@ import (
 
 	"github.com/containers/toolbox/pkg/podman"
 	"github.com/containers/toolbox/pkg/utils"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -44,13 +43,13 @@ var rmCmd = &cobra.Command{
 func init() {
 	flags := rmCmd.Flags()
 
-	flags.BoolVarP(&rmFlags.deleteAll, "all", "a", false, "Remove all toolbox containers.")
+	flags.BoolVarP(&rmFlags.deleteAll, "all", "a", false, "Remove all toolbox containers")
 
 	flags.BoolVarP(&rmFlags.forceDelete,
 		"force",
 		"f",
 		false,
-		"Force the removal of running and paused toolbox containers.")
+		"Force the removal of running and paused toolbox containers")
 
 	rmCmd.SetHelpFunc(rmHelp)
 	rootCmd.AddCommand(rmCmd)
@@ -70,31 +69,15 @@ func rm(cmd *cobra.Command, args []string) error {
 	}
 
 	if rmFlags.deleteAll {
-		logrus.Debug("Fetching containers with label=com.redhat.component=fedora-toolbox")
-		args := []string{"--all", "--filter", "label=com.redhat.component=fedora-toolbox"}
-		containers_old, err := podman.GetContainers(args...)
+		var toolboxContainers []toolboxContainer
+
+		toolboxContainers, err := getContainers()
 		if err != nil {
-			return errors.New("failed to list containers with com.redhat.component=fedora-toolbox")
+			return err
 		}
 
-		logrus.Debug("Fetching containers with label=com.github.debarshiray.toolbox=true")
-		args = []string{"--all", "--filter", "label=com.github.debarshiray.toolbox=true"}
-		containers_new, err := podman.GetContainers(args...)
-		if err != nil {
-			return errors.New("failed to list containers with com.github.debarshiray.toolbox=true")
-		}
-
-		var idKey string
-		if podman.CheckVersion("2.0.0") {
-			idKey = "Id"
-		} else {
-			idKey = "ID"
-		}
-
-		containers := utils.JoinJSON(idKey, containers_old, containers_new)
-
-		for _, container := range containers {
-			containerID := container[idKey].(string)
+		for _, container := range toolboxContainers {
+			containerID := container.ID
 			if err := podman.RemoveContainer(containerID, rmFlags.forceDelete); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 				continue

@@ -1,3 +1,5 @@
+# shellcheck shell=sh
+
 [ "$BASH_VERSION" != "" ] || [ "$ZSH_VERSION" != "" ] || return 0
 [ "$PS1" != "" ] || return 0
 
@@ -6,8 +8,8 @@ host_welcome_stub="$toolbox_config/host-welcome-shown"
 toolbox_welcome_stub="$toolbox_config/toolbox-welcome-shown"
 
 # shellcheck disable=2046
+# shellcheck disable=SC1091
 eval $(
-          # shellcheck disable=SC1091
           . /usr/lib/os-release
 
           echo ID="$ID"
@@ -53,6 +55,14 @@ if [ -f /run/.containerenv ] \
 
         mkdir -p "$toolbox_config"
         touch "$toolbox_welcome_stub"
+    fi
+
+    if ! [ -f /etc/profile.d/vte.sh ] && [ -z "$PROMPT_COMMAND" ] && [ "${VTE_VERSION:-0}" -ge 3405 ]; then
+        case "$TERM" in
+            xterm*|vte*)
+                [ -n "${BASH_VERSION:-}" ] && PROMPT_COMMAND=" "
+                ;;
+        esac
     fi
 
     if [ "$TERM" != "" ]; then

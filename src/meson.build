@@ -10,7 +10,6 @@ sources = files(
   'cmd/help.go',
   'cmd/initContainer.go',
   'cmd/list.go',
-  'cmd/reset.go',
   'cmd/rm.go',
   'cmd/rmi.go',
   'cmd/root.go',
@@ -41,3 +40,5 @@ custom_target(
 if shellcheck.found()
   test('shellcheck go-build-wrapper', shellcheck, args: [go_build_wrapper_file])
 endif
+
+test('toolbox go unit tests', go, args: ['test', '-v', './...'], workdir: meson.current_source_dir())

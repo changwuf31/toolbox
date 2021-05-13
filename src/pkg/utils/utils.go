@@ -1,5 +1,5 @@
 /*
- * Copyright © 2019 – 2020 Red Hat Inc.
+ * Copyright © 2019 – 2021 Red Hat Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,20 +39,31 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type ParseReleaseFunc func(string) (string, error)
+
+type Distro struct {
+	ContainerNamePrefix    string
+	ImageBasename          string
+	ParseRelease           ParseReleaseFunc
+	Registry               string
+	Repository             string
+	RepositoryNeedsRelease bool
+}
+
 const (
 	idTruncLength          = 12
-	releaseDefaultFallback = "31"
+	releaseDefaultFallback = "33"
 )
 
 const (
-	ContainerNamePrefixDefault = "fedora-toolbox"
-
 	// Based on the nameRegex value in:
 	// https://github.com/containers/libpod/blob/master/libpod/options.go
 	ContainerNameRegexp = "[a-zA-Z0-9][a-zA-Z0-9_.-]*"
 )
 
 var (
+	distroDefault = "fedora"
+
 	preservedEnvironmentVariables = []string{
 		"COLORTERM",
 		"DBUS_SESSION_BUS_ADDRESS",
@@ -64,6 +75,7 @@ var (
 		"SSH_AUTH_SOCK",
 		"TERM",
 		"TOOLBOX_PATH",
+		"USER",
 		"VTE_VERSION",
 		"WAYLAND_DISPLAY",
 		"XAUTHORITY",
@@ -79,10 +91,30 @@ var (
 	}
 
 	releaseDefault string
+
+	supportedDistros = map[string]Distro{
+		"fedora": {
+			"fedora-toolbox",
+			"fedora-toolbox",
+			parseReleaseFedora,
+			"registry.fedoraproject.org",
+			"",
+			false,
+		},
+		"rhel": {
+			"rhel-toolbox",
+			"ubi",
+			parseReleaseRHEL,
+			"registry.access.redhat.com",
+			"ubi8",
+			false,
+		},
+	}
 )
 
 var (
-	ContainerNameDefault string
+	ContainerNameDefault       string
+	ContainerNamePrefixDefault = "fedora-toolbox"
 )
 
 func init() {
@@ -90,9 +122,11 @@ func init() {
 
 	hostID, err := GetHostID()
 	if err == nil {
-		if hostID == "fedora" {
+		if distroObj, supportedDistro := supportedDistros[hostID]; supportedDistro {
 			release, err := GetHostVersionID()
 			if err == nil {
+				ContainerNamePrefixDefault = distroObj.ContainerNamePrefix
+				distroDefault = hostID
 				releaseDefault = release
 			}
 		}
@@ -235,6 +269,38 @@ func GetCgroupsVersion() (int, error) {
 	return version, nil
 }
 
+func GetContainerNamePrefixForImage(image string) (string, error) {
+	basename := ImageReferenceGetBasename(image)
+	if basename == "" {
+		return "", fmt.Errorf("failed to get the basename of image %s", image)
+	}
+
+	for _, distroObj := range supportedDistros {
+		if distroObj.ImageBasename != basename {
+			continue
+		}
+
+		return distroObj.ContainerNamePrefix, nil
+	}
+
+	return basename, nil
+}
+
+func GetDefaultImageForDistro(distro, release string) string {
+	if _, supportedDistro := supportedDistros[distro]; !supportedDistro {
+		distro = "fedora"
+	}
+
+	distroObj, supportedDistro := supportedDistros[distro]
+	if !supportedDistro {
+		panicMsg := fmt.Sprintf("failed to find %s in the list of supported distributions", distro)
+		panic(panicMsg)
+	}
+
+	image := distroObj.ImageBasename + ":" + release
+	return image
+}
+
 func GetEnvOptionsForPreservedVariables() []string {
 	logrus.Debug("Creating list of environment variables to forward")
 
@@ -252,6 +318,47 @@ func GetEnvOptionsForPreservedVariables() []string {
 	}
 
 	return envOptions
+}
+
+func GetFullyQualifiedImageFromDistros(image, release string) (string, error) {
+	logrus.Debugf("Resolving fully qualified name for image %s from known registries", image)
+
+	if ImageReferenceHasDomain(image) {
+		return image, nil
+	}
+
+	basename := ImageReferenceGetBasename(image)
+	if basename == "" {
+		return "", fmt.Errorf("failed to get the basename of image %s", image)
+	}
+
+	for _, distroObj := range supportedDistros {
+		if distroObj.ImageBasename != basename {
+			continue
+		}
+
+		var repository string
+
+		if distroObj.RepositoryNeedsRelease {
+			repository = fmt.Sprintf(distroObj.Repository, release)
+		} else {
+			repository = distroObj.Repository
+		}
+
+		imageFull := distroObj.Registry
+
+		if repository != "" {
+			imageFull = imageFull + "/" + repository
+		}
+
+		imageFull = imageFull + "/" + image
+
+		logrus.Debugf("Resolved image %s to %s", image, imageFull)
+
+		return imageFull, nil
+	}
+
+	return "", fmt.Errorf("failed to resolve image %s", image)
 }
 
 // GetGroupForSudo returns the name of the sudoers group.
@@ -340,15 +447,17 @@ func GetMountOptions(target string) (string, error) {
 
 	output := stdout.String()
 	options := strings.Split(output, "\n")
-	if len(options) != 2 {
-		return "", errors.New("unexpected output from findmnt(1)")
-	}
 
 	mountOptions := strings.TrimSpace(options[0])
 	return mountOptions, nil
 }
 
 func GetRuntimeDirectory(targetUser *user.User) (string, error) {
+	gid, err := strconv.Atoi(targetUser.Gid)
+	if err != nil {
+		return "", fmt.Errorf("failed to convert group ID to integer: %w", err)
+	}
+
 	uid, err := strconv.Atoi(targetUser.Uid)
 	if err != nil {
 		return "", fmt.Errorf("failed to convert user ID to integer: %w", err)
@@ -372,7 +481,7 @@ func GetRuntimeDirectory(targetUser *user.User) (string, error) {
 		return "", wrapped_err
 	}
 
-	if err := os.Chown(toolboxRuntimeDirectory, uid, uid); err != nil {
+	if err := os.Chown(toolboxRuntimeDirectory, uid, gid); err != nil {
 		wrapped_err := fmt.Errorf("failed to change ownership of the runtime directory %s: %w",
 			toolboxRuntimeDirectory,
 			err)
@@ -466,7 +575,27 @@ func ShortID(id string) string {
 	return id
 }
 
-func ParseRelease(str string) (string, error) {
+func ParseRelease(distro, str string) (string, error) {
+	if distro == "" {
+		distro = distroDefault
+	}
+
+	if _, supportedDistro := supportedDistros[distro]; !supportedDistro {
+		distro = "fedora"
+	}
+
+	distroObj, supportedDistro := supportedDistros[distro]
+	if !supportedDistro {
+		panicMsg := fmt.Sprintf("failed to find %s in the list of supported distributions", distro)
+		panic(panicMsg)
+	}
+
+	parseRelease := distroObj.ParseRelease
+	release, err := parseRelease(str)
+	return release, err
+}
+
+func parseReleaseFedora(str string) (string, error) {
 	var release string
 
 	if strings.HasPrefix(str, "F") || strings.HasPrefix(str, "f") {
@@ -487,6 +616,23 @@ func ParseRelease(str string) (string, error) {
 	return release, nil
 }
 
+func parseReleaseRHEL(str string) (string, error) {
+	if i := strings.IndexRune(str, '.'); i == -1 {
+		return "", errors.New("release must have a '.'")
+	}
+
+	releaseN, err := strconv.ParseFloat(str, 32)
+	if err != nil {
+		return "", err
+	}
+
+	if releaseN <= 0 {
+		return "", errors.New("release must be a positive number")
+	}
+
+	return str, nil
+}
+
 // PathExists wraps around os.Stat providing a nice interface for checking an existence of a path.
 func PathExists(path string) bool {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -497,10 +643,15 @@ func PathExists(path string) bool {
 }
 
 // IsContainerNameValid checks if the name of a container matches the right pattern
-func IsContainerNameValid(containerName string) (bool, error) {
+func IsContainerNameValid(containerName string) bool {
 	pattern := "^" + ContainerNameRegexp + "$"
 	matched, err := regexp.MatchString(pattern, containerName)
-	return matched, err
+	if err != nil {
+		panicMsg := fmt.Sprintf("failed to parse regular expression for container name: %v", err)
+		panic(panicMsg)
+	}
+
+	return matched
 }
 
 func IsInsideContainer() bool {
@@ -547,18 +698,27 @@ func JoinJSON(joinkey string, maps ...[]map[string]interface{}) []map[string]int
 // If no container name is specified then the name of the image will be used.
 //
 // If the host system is unknown then the base image will be 'fedora-toolbox' with a default version
-func ResolveContainerAndImageNames(container, image, release string) (string, string, string, error) {
+func ResolveContainerAndImageNames(container, distro, image, release string) (string, string, string, error) {
 	logrus.Debug("Resolving container and image names")
 	logrus.Debugf("Container: '%s'", container)
+	logrus.Debugf("Distribution: '%s'", distro)
 	logrus.Debugf("Image: '%s'", image)
 	logrus.Debugf("Release: '%s'", release)
+
+	if distro == "" {
+		distro = distroDefault
+	}
+
+	if distro != distroDefault && release == "" {
+		return "", "", "", fmt.Errorf("release not found for non-default distribution %s", distro)
+	}
 
 	if release == "" {
 		release = releaseDefault
 	}
 
 	if image == "" {
-		image = "fedora-toolbox:" + release
+		image = GetDefaultImageForDistro(distro, release)
 	} else {
 		release = ImageReferenceGetTag(image)
 		if release == "" {
@@ -567,12 +727,11 @@ func ResolveContainerAndImageNames(container, image, release string) (string, st
 	}
 
 	if container == "" {
-		basename := ImageReferenceGetBasename(image)
-		if basename == "" {
-			return "", "", "", fmt.Errorf("failed to get the basename of image %s", image)
+		var err error
+		container, err = GetContainerNamePrefixForImage(image)
+		if err != nil {
+			return "", "", "", err
 		}
-
-		container = basename
 
 		tag := ImageReferenceGetTag(image)
 		if tag != "" {

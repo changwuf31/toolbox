@@ -1,5 +1,5 @@
 /*
- * Copyright © 2019 – 2020 Red Hat Inc.
+ * Copyright © 2019 – 2021 Red Hat Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@ import (
 var (
 	enterFlags struct {
 		container string
+		distro    string
 		release   string
 	}
 )
@@ -46,13 +47,19 @@ func init() {
 		"container",
 		"c",
 		"",
-		"Enter a toolbox container with the given name.")
+		"Enter a toolbox container with the given name")
+
+	flags.StringVarP(&enterFlags.distro,
+		"distro",
+		"d",
+		"",
+		"Enter a toolbox container for a different operating system distribution than the host")
 
 	flags.StringVarP(&enterFlags.release,
 		"release",
 		"r",
 		"",
-		"Enter a toolbox container for a different operating system release than the host.")
+		"Enter a toolbox container for a different operating system release than the host")
 
 	enterCmd.SetHelpFunc(enterHelp)
 	rootCmd.AddCommand(enterCmd)
@@ -86,7 +93,7 @@ func enter(cmd *cobra.Command, args []string) error {
 	if container != "" {
 		nonDefaultContainer = true
 
-		if _, err := utils.IsContainerNameValid(container); err != nil {
+		if !utils.IsContainerNameValid(container) {
 			var builder strings.Builder
 			fmt.Fprintf(&builder, "invalid argument for '%s'\n", containerArg)
 			fmt.Fprintf(&builder, "Container names must match '%s'\n", utils.ContainerNameRegexp)
@@ -102,14 +109,14 @@ func enter(cmd *cobra.Command, args []string) error {
 		nonDefaultContainer = true
 
 		var err error
-		release, err = utils.ParseRelease(enterFlags.release)
+		release, err = utils.ParseRelease(enterFlags.distro, enterFlags.release)
 		if err != nil {
 			err := utils.CreateErrorInvalidRelease(executableBase)
 			return err
 		}
 	}
 
-	container, image, release, err := utils.ResolveContainerAndImageNames(container, "", release)
+	container, image, release, err := utils.ResolveContainerAndImageNames(container, enterFlags.distro, "", release)
 	if err != nil {
 		return err
 	}
@@ -123,7 +130,7 @@ func enter(cmd *cobra.Command, args []string) error {
 
 	hostID, err := utils.GetHostID()
 	if err != nil {
-		return errors.New("failed to get the host ID")
+		return fmt.Errorf("failed to get the host ID: %w", err)
 	}
 
 	hostVariantID, err := utils.GetHostVariantID()

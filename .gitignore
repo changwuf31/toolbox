@@ -1,2 +1,4 @@
 src/toolbox
 builddir
+test/system/libs/bats-assert
+test/system/libs/bats-support
