@@ -32,6 +32,8 @@ php-cli
 php-bcmath
 php-pecl-mongodb
 php-imap
+php-pdo
+php-mysqlnd
 composer
 phpunit8
 psmisc
