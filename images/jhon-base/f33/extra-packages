@@ -4,11 +4,13 @@ bc
 bat
 bmon
 direnv
+docker-compose
 fedora-workstation-repositories
 gcc
 gcc-c++
 git-lfs
 golang
+go-md2man
 htop
 httpd-tools
 ImageMagick
@@ -16,10 +18,11 @@ java-1.8.0-openjdk
 jq
 make
 moc
-ncdu
-nmon
 nc
+ncdu
 neovim
+ninja-build
+nmon
 perl
 pass
 patch
@@ -37,6 +40,7 @@ profile-sync-daemon
 progress
 pulseaudio-utils
 python3-neovim
+python3-pyyaml
 redhat-rpm-config
 ripgrep
 ruby
