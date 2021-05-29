@@ -445,6 +445,7 @@ func createContainer(container, image, release, hostname string, showCommandToEn
 		"--volume", "/var/home/shared:/var/home/shared:rslave",
 		"--volume", "/var/home/shared/var/cache/dnf:/var/cache/dnf:rslave",
 		"--volume", "/var/run/podman.sock:/var/run/docker.sock",
+		"--volume", "/dev/shm:/run/user/" + currentUser.Uid + "/gnupg",
 		"--volume", dbusSystemSocketMountArg,
 		"--volume", homeDirMountArg,
 		"--volume", toolboxPathMountArg,
