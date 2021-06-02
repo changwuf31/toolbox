@@ -20,5 +20,9 @@ COPY extra-packages /
 RUN dnf -y install $(<extra-packages)
 RUN rm /extra-packages
 
+RUN \
+  dnf module reset php && \
+  dnf module install -y php:remi-7.4
+
 RUN dnf clean all
 
